@@ -94,7 +94,8 @@ TimeslotStats.prototype.ensureSlot = function(ts, interval) {
     ts -= interval;
   }
 };
-TimeslotStats.prototype.getSlot = function(ts_index) {
+TimeslotStats.prototype.getSlot = function(ts, interval) {
+  var ts_index = this.getStatsIndex(ts, interval);
   for (var i = this.slots.length - 1; i >= 0; i--) {
     if (this.slots[i].time_stamp === ts_index) {
       return this.slots[i];
@@ -152,7 +153,6 @@ TimeslotStats.prototype.newSlot = function(ts_index) {
   // Normally gauges are not reset.  so if we don't delete them, continue to persist previous value
   var deleteGauges = this.conf.deleteGauges || false;
   var gauges = {};
-  //prefill(gauges, this.default_metric_keys.gauges);
   if (!deleteGauges && !!last) {
     for (var i in last.gauges) {
       gauges[i] = last.gauges[i];  // assuming this is an int, just copy
@@ -188,7 +188,6 @@ function flushMetrics() {
       first_send = false;
     } else {
       slot.gauges[timestamp_lag_namespace] = (ts - time_stamp);
-      console.log('||SENDING ', timestamp_lag_namespace, ': ', slot.gauges[timestamp_lag_namespace], ' -- ', ts, ' - ', time_stamp);
     }
     var metrics_hash = {
       counters: slot.counters,
@@ -244,37 +243,29 @@ config.configFile(process.argv[2], function (config) {
   timestamp_lag_namespace = prefixStats + ".timestamp_lag";
 
   stats_holder = new TimeslotStats(
-    {counters: [bad_lines_seen, packets_received, metrics_received],
-     //gauges: [timestamp_lag_namespace]
-    },
+    {counters: [bad_lines_seen, packets_received, metrics_received],},
     conf);
   // initialize stats
   stats_holder.ensureSlot(new Date().getTime(), config.flushInterval);
 
-  var getSlot = function(idx) {
-    return stats_holder.getSlot(idx);
-  };
   var ensureStats = function(stat, name, def) {
     if (stat[name] === undefined) {
       stat[name] = def;
     }
   };
 
-  var incCounter = function(idx, name, step) {
-    var slot = getSlot(idx);
+  var incCounter = function(slot, name, step) {
     ensureStats(slot.counters, name, 0);
     step = step || 1;
     slot.counters[name] += step;
   };
-  var updateTimer = function(idx, name, timer_data, timer_counter_data) {
-    var slot = getSlot(idx);
+  var updateTimer = function(slot, name, timer_data, timer_counter_data) {
     ensureStats(slot.timers, name, []);
     ensureStats(slot.timer_counters, name, 0);
     slot.timers[name].push(timer_data);
     slot.timer_counters[name] += timer_counter_data;
   };
-  var updateOrOverrideGauge = function(idx, name, update, gauge_data) {
-    var slot = getSlot(idx);
+  var updateOrOverrideGauge = function(slot, name, update, gauge_data) {
     ensureStats(slot.gauges, name, 0);
     if (update) {
       slot.gauges[name] += gauge_data;
@@ -282,8 +273,7 @@ config.configFile(process.argv[2], function (config) {
       slot.gauges[name] = gauge_data;
     }
   };
-  var addToSet = function(idx, name, elm) {
-    var slot = getSlot(idx);
+  var addToSet = function(slot, name, elm) {
     if (!slot.sets[name]) {
       slot.sets[name] = new set.Set();
     }
@@ -309,9 +299,9 @@ config.configFile(process.argv[2], function (config) {
 
     var handlePacket = function (msg, rinfo) {
       var ts = new Date().getTime();
-      var stats_index = stats_holder.getStatsIndex(ts, config.flushInterval);
+      var slot = stats_holder.getSlot(ts, config.flushInterval);
       backendEvents.emit('packet', msg, rinfo);
-      incCounter(stats_index, packets_received);
+      incCounter(slot, packets_received);
       var metrics;
       var packet_data = msg.toString();
       if (packet_data.indexOf("\n") > -1) {
@@ -319,14 +309,13 @@ config.configFile(process.argv[2], function (config) {
       } else {
         metrics = [ packet_data ] ;
       }
-      console.log('I>I>I>METRICS ', metrics);
 
       for (var midx in metrics) {
         if (metrics[midx].length === 0) {
           continue;
         }
 
-        incCounter(stats_index, metrics_received);
+        incCounter(slot, metrics_received);
         if (config.dumpMessages) {
           l.log(metrics[midx].toString());
         }
@@ -349,7 +338,7 @@ config.configFile(process.argv[2], function (config) {
           var fields = bits[i].split("|");
           if (!helpers.is_valid_packet(fields)) {
               l.log('Bad line: ' + fields + ' in msg "' + metrics[midx] +'"');
-              incCounter(stats_index, bad_lines_seen);
+              incCounter(slot, bad_lines_seen);
               stats.messages.bad_lines_seen++;
               continue;
           }
@@ -359,20 +348,13 @@ config.configFile(process.argv[2], function (config) {
 
           var metric_type = fields[1].trim();
           if (metric_type === "ms") {
-            console.log('I>I>I> UPDATE TIMER ', fields);
-            updateTimer(stats_index, key, Number(fields[0] || 0), (1 / sampleRate));
-            console.log('I>I>I> UPDATED TIMERS ', getSlot(stats_index).timers);
+            updateTimer(slot, key, Number(fields[0] || 0), (1 / sampleRate));
           } else if (metric_type === "g") {
-            updateOrOverrideGauge(stats_index, key, fields[0].match(/^[-+]/), Number(fields[0] || 0));
-            // if (getGauges(stats_index)[key] && fields[0].match(/^[-+]/)) {
-            //   getGauges(stats_index)[key] += Number(fields[0] || 0);
-            // } else {
-            //   getGauges(stats_index)[key] = Number(fields[0] || 0);
-            // }
+            updateOrOverrideGauge(slot, key, fields[0].match(/^[-+]/), Number(fields[0] || 0));
           } else if (metric_type === "s") {
-            addToSet(stats_index, key, fields[0] || '0');
+            addToSet(slot, key, fields[0] || '0');
           } else {
-            incCounter(stats_index, key, Number(fields[0] || 1) * (1 / sampleRate));
+            incCounter(slot, key, Number(fields[0] || 1) * (1 / sampleRate));
           }
         }
       }
@@ -391,8 +373,8 @@ config.configFile(process.argv[2], function (config) {
     mgmt_server.start(
       config,
       function(cmd, parameters, stream) {
-        var stats_index = stats_holder.getStatsIndex(new Date().getTime(), config.flushInterval);
-        var slot = getSlot(stats_index);
+        var now = new Date().getTime();
+        var slot = stats_holder.getSlot(now, config.flushInterval);
         switch(cmd) {
           case "help":
             stream.write("Commands: stats, counters, timers, gauges, delcounters, deltimers, delgauges, health, config, quit\n\n");
