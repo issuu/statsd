@@ -177,7 +177,10 @@ function flushMetrics() {
   var ts = new Date().getTime();
   // ensure slot for the tick
   stats_holder.ensureSlot(ts, conf.flushInterval);
-  var to_flush = stats_holder.getCompleted(ts, conf.flushInterval);
+  // why the ts - 1 you might ask, that is to avoid to flush
+  // stats for this precise millisecond, since it might happen that
+  // we get stats for the same slot after we flush.
+  var to_flush = stats_holder.getCompleted(ts - 1, conf.flushInterval);
   for (var i = 0; i < to_flush.length; i++) {
     var slot = to_flush[i];
     var time_stamp = slot.time_stamp;
