@@ -122,6 +122,7 @@ module.exports = {
     var configfile = "{graphService: \"graphite\"\n\
                ,  batch: 200 \n\
                ,  flushInterval: " + this.myflush + " \n\
+               ,  flushRate: 5 \n\
                ,  percentThreshold: 90\n\
                ,  histogram: [ { metric: \"a_test_value\", bins: [1000] } ]\n\
                ,  port: 8125\n\

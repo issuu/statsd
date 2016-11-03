@@ -82,6 +82,7 @@ module.exports = {
     var configfile = "{graphService: \"graphite\"\n\
                ,  batch: 200 \n\
                ,  flushInterval: " + this.myflush + " \n\
+               ,  flushRate: 10 \n\
                ,  percentThreshold: 90\n\
                ,  port: 8125\n\
                ,  dumpMessages: false \n\
